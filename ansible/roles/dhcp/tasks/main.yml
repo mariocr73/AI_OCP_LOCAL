@@ -1,0 +1,56 @@
+---
+# ===========================================================
+# Role: dhcp - Validate DHCP service via dnsmasq
+# ===========================================================
+# The DHCP configuration is embedded in dnsmasq.conf.j2
+# (deployed by the dns role). This role validates that DHCP
+# reservations are correctly served and leases are active.
+# ===========================================================
+
+# ---- Ensure dnsmasq is running (DHCP depends on it) ----
+- name: Ensure dnsmasq is running for DHCP
+  ansible.builtin.systemd:
+    name: dnsmasq
+    state: started
+    enabled: true
+
+# ---- Create DHCP lease directory ----
+- name: Ensure DHCP lease file directory exists
+  ansible.builtin.file:
+    path: /var/lib/dnsmasq
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# ---- Validate DHCP configuration ----
+- name: Test dnsmasq configuration (includes DHCP)
+  ansible.builtin.command:
+    cmd: dnsmasq --test
+  register: _dnsmasq_test
+  changed_when: false
+  failed_when: _dnsmasq_test.rc != 0
+
+- name: Verify DHCP reservations are configured
+  ansible.builtin.command:
+    cmd: "grep -c 'dhcp-host=' /etc/dnsmasq.conf"
+  register: _dhcp_reservations
+  changed_when: false
+
+- name: Validate expected number of DHCP reservations
+  ansible.builtin.assert:
+    that:
+      - _dhcp_reservations.stdout | int >= (masters | length)
+    fail_msg: "Expected {{ masters | length }} DHCP reservations, found {{ _dhcp_reservations.stdout }}"
+    success_msg: "{{ _dhcp_reservations.stdout }} DHCP reservations configured (expected {{ masters | length }})"
+
+# ---- Verify DHCP port is listening ----
+- name: Verify UDP port 67 (DHCP) is available
+  ansible.builtin.command:
+    cmd: ss -ulnp
+  register: _dhcp_port
+  changed_when: false
+
+- name: Display DHCP port status
+  ansible.builtin.debug:
+    msg: "DHCP port 67: {{ 'LISTENING' if ':67 ' in _dhcp_port.stdout else 'NOT LISTENING' }}"

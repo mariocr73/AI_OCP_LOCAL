@@ -1,0 +1,46 @@
+# ===== Secrets =====
+pull-secret.json
+*pull-secret*
+offline-token*
+*offline_token*
+*.key
+*.pem
+
+# ===== OpenShift credentials =====
+output/
+kubeconfig
+*.kubeconfig
+auth/
+
+# ===== Discovery ISO =====
+*.iso
+*.img
+
+# ===== Ansible =====
+*.retry
+.vault_password
+ansible/.vault_password
+
+# ===== Editor/IDE =====
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Logs =====
+*.log
+
+# ===== Local-only scripts and docs =====
+scripts/cluster_startup.sh
+scripts/cluster_shutdown.sh
+docs/troubleshooting-haproxy.md
+docs/troubleshooting-external-lb.md
+
+# ===== Temporary =====
+/tmp/
+*.tmp

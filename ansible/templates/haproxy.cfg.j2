@@ -1,0 +1,109 @@
+# ===========================================================
+# HAProxy configuration for OCP {{ cluster_name }}.{{ base_domain }}
+# Managed by Ansible - do not edit manually
+# ===========================================================
+
+global
+    log         /dev/log local0
+    log         /dev/log local1 notice
+    chroot      /var/lib/haproxy
+    pidfile     /var/run/haproxy.pid
+    maxconn     4000
+    user        haproxy
+    group       haproxy
+    daemon
+    stats socket /var/lib/haproxy/stats
+
+defaults
+    mode                    tcp
+    log                     global
+    option                  tcplog
+    option                  dontlognull
+    retries                 3
+    timeout http-request    10s
+    timeout queue           1m
+    timeout connect         10s
+    timeout client          1m
+    timeout server          1m
+    timeout http-keep-alive 10s
+    timeout check           10s
+    maxconn                 3000
+
+# ===========================================================
+# Stats page - http://{{ bastion.ip }}:9000/haproxy_stats
+# ===========================================================
+listen stats
+    bind *:9000
+    mode http
+    stats enable
+    stats uri /haproxy_stats
+    stats refresh 10s
+    stats show-legends
+
+# ===========================================================
+# API Server - port {{ haproxy_backend_port.api }}
+# Kubernetes API (oc, kubectl, console login)
+# ===========================================================
+frontend api_frontend
+    bind *:{{ haproxy_backend_port.api }}
+    default_backend api_backend
+
+backend api_backend
+    option  httpchk GET /readyz HTTP/1.0
+    option  log-health-checks
+    default-server inter 10s fall 2 rise 3
+    balance roundrobin
+{% for master in masters %}
+    server {{ master.name }} {{ master.ip }}:{{ haproxy_backend_port.api }} check check-ssl verify none
+{% endfor %}
+
+# ===========================================================
+# Machine Config Server - port {{ haproxy_backend_port.ignition }}
+# Ignition configs during bootstrap and installation
+# ===========================================================
+frontend ignition_frontend
+    bind *:{{ haproxy_backend_port.ignition }}
+    default_backend ignition_backend
+
+backend ignition_backend
+    option  httpchk GET /healthz HTTP/1.0
+    option  log-health-checks
+    default-server inter 10s fall 2 rise 3
+    balance roundrobin
+{% for master in masters %}
+    server {{ master.name }} {{ master.ip }}:{{ haproxy_backend_port.ignition }} check check-ssl verify none
+{% endfor %}
+
+# ===========================================================
+# HTTP Ingress - port {{ haproxy_backend_port.ingress_http }}
+# Router HTTP traffic (*.apps)
+# ===========================================================
+frontend ingress_http_frontend
+    bind *:{{ haproxy_backend_port.ingress_http }}
+    default_backend ingress_http_backend
+
+backend ingress_http_backend
+    option  httpchk GET /healthz/ready HTTP/1.0
+    option  log-health-checks
+    default-server inter 10s fall 2 rise 3
+    balance roundrobin
+{% for master in masters %}
+    server {{ master.name }} {{ master.ip }}:{{ haproxy_backend_port.ingress_http }} check
+{% endfor %}
+
+# ===========================================================
+# HTTPS Ingress - port {{ haproxy_backend_port.ingress_https }}
+# Router HTTPS traffic (*.apps)
+# ===========================================================
+frontend ingress_https_frontend
+    bind *:{{ haproxy_backend_port.ingress_https }}
+    default_backend ingress_https_backend
+
+backend ingress_https_backend
+    option  httpchk GET /healthz/ready HTTP/1.0
+    option  log-health-checks
+    default-server inter 10s fall 2 rise 3
+    balance roundrobin
+{% for master in masters %}
+    server {{ master.name }} {{ master.ip }}:{{ haproxy_backend_port.ingress_https }} check check-ssl verify none
+{% endfor %}

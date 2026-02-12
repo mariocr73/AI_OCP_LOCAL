@@ -1,0 +1,143 @@
+---
+# ===========================================================
+# Role: postinstall - Post-installation verification
+# ===========================================================
+# Validates the cluster is healthy after Assisted Installer
+# completes: cluster operators, nodes, ingress, DNS.
+# ===========================================================
+
+- name: Set KUBECONFIG path
+  ansible.builtin.set_fact:
+    _kubeconfig: "{{ kubeconfig_dir }}/kubeconfig"
+
+- name: Verify kubeconfig exists
+  ansible.builtin.stat:
+    path: "{{ _kubeconfig }}"
+  register: _kc_stat
+  failed_when: not _kc_stat.stat.exists
+
+# ---- Wait for API to be reachable ----
+- name: Wait for API server to respond
+  ansible.builtin.uri:
+    url: "https://api.{{ cluster_name }}.{{ base_domain }}:6443/healthz"
+    method: GET
+    validate_certs: false
+    status_code: 200
+  register: _api_health
+  retries: 30
+  delay: 10
+  until: _api_health.status == 200
+  failed_when: false
+
+# ---- Cluster Operators ----
+- name: Get cluster operators
+  ansible.builtin.command:
+    cmd: "oc get co --no-headers"
+  environment:
+    KUBECONFIG: "{{ _kubeconfig }}"
+  register: _co_output
+  changed_when: false
+  retries: 5
+  delay: 30
+  until: _co_output.rc == 0
+
+- name: Display cluster operators
+  ansible.builtin.debug:
+    msg: "{{ _co_output.stdout_lines }}"
+
+- name: Check for degraded cluster operators
+  ansible.builtin.command:
+    cmd: >
+      oc get co -o jsonpath='{range .items[*]}{.metadata.name}{" Available="}{.status.conditions[?(@.type=="Available")].status}{" Degraded="}{.status.conditions[?(@.type=="Degraded")].status}{"\n"}{end}'
+  environment:
+    KUBECONFIG: "{{ _kubeconfig }}"
+  register: _co_status
+  changed_when: false
+
+- name: Display cluster operator status
+  ansible.builtin.debug:
+    msg: "{{ _co_status.stdout_lines }}"
+
+# ---- Nodes ----
+- name: Get cluster nodes
+  ansible.builtin.command:
+    cmd: "oc get nodes -o wide --no-headers"
+  environment:
+    KUBECONFIG: "{{ _kubeconfig }}"
+  register: _nodes_output
+  changed_when: false
+
+- name: Display cluster nodes
+  ansible.builtin.debug:
+    msg: "{{ _nodes_output.stdout_lines }}"
+
+- name: Verify all nodes are Ready
+  ansible.builtin.command:
+    cmd: >
+      oc get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}'
+  environment:
+    KUBECONFIG: "{{ _kubeconfig }}"
+  register: _nodes_ready
+  changed_when: false
+  failed_when: "'False' in _nodes_ready.stdout"
+
+# ---- Ingress ----
+- name: Verify ingress controller is available
+  ansible.builtin.command:
+    cmd: "oc get ingresscontroller default -n openshift-ingress-operator -o jsonpath='{.status.conditions[?(@.type==\"Available\")].status}'"
+  environment:
+    KUBECONFIG: "{{ _kubeconfig }}"
+  register: _ingress_status
+  changed_when: false
+  retries: 10
+  delay: 30
+  until: _ingress_status.stdout == 'True'
+
+- name: Display ingress status
+  ansible.builtin.debug:
+    msg: "Ingress controller available: {{ _ingress_status.stdout }}"
+
+# ---- Console route ----
+- name: Get console URL
+  ansible.builtin.command:
+    cmd: "oc get route console -n openshift-console -o jsonpath='{.spec.host}'"
+  environment:
+    KUBECONFIG: "{{ _kubeconfig }}"
+  register: _console_url
+  changed_when: false
+  failed_when: false
+
+- name: Display console URL
+  ansible.builtin.debug:
+    msg: "OpenShift Console: https://{{ _console_url.stdout }}"
+  when: _console_url.rc == 0
+
+# ---- DNS validation ----
+- name: Validate DNS for API endpoint
+  ansible.builtin.command:
+    cmd: "dig @{{ bastion.dns }} api.{{ cluster_name }}.{{ base_domain }} +short"
+  register: _dns_api
+  changed_when: false
+  failed_when: "api_vip not in _dns_api.stdout"
+
+- name: Validate DNS for apps wildcard
+  ansible.builtin.command:
+    cmd: "dig @{{ bastion.dns }} console-openshift-console.apps.{{ cluster_name }}.{{ base_domain }} +short"
+  register: _dns_apps
+  changed_when: false
+  failed_when: "ingress_vip not in _dns_apps.stdout"
+
+# ---- Summary ----
+- name: Post-installation summary
+  ansible.builtin.debug:
+    msg:
+      - "============================================="
+      - "  OCP {{ ocp_version }} Compact Cluster - INSTALLED"
+      - "============================================="
+      - "  Cluster:    {{ cluster_name }}.{{ base_domain }}"
+      - "  API VIP:    {{ api_vip }}"
+      - "  Ingress VIP: {{ ingress_vip }}"
+      - "  Console:    https://{{ _console_url.stdout | default('N/A') }}"
+      - "  Kubeconfig: {{ _kubeconfig }}"
+      - "  Nodes:      {{ masters | length }} control-plane (schedulable)"
+      - "============================================="

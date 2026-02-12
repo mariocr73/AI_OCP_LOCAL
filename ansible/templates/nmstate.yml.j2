@@ -1,0 +1,32 @@
+# ===========================================================
+# NMState static network config for {{ item.name }}
+# Embedded into the Discovery ISO via Assisted Installer API
+# Variables: item.ip, item.mac, bastion.dns, libvirt_network.gw
+# ===========================================================
+
+interfaces:
+  - name: ens3
+    type: ethernet
+    state: up
+    mac-address: "{{ item.mac }}"
+    ipv4:
+      enabled: true
+      address:
+        - ip: "{{ item.ip }}"
+          prefix-length: {{ libvirt_network.prefix | default(24) }}
+      dhcp: false
+    ipv6:
+      enabled: false
+
+dns-resolver:
+  config:
+    server:
+      - "{{ bastion.dns }}"
+    search:
+      - "{{ cluster_name }}.{{ base_domain }}"
+
+routes:
+  config:
+    - destination: 0.0.0.0/0
+      next-hop-address: "{{ libvirt_network.gw }}"
+      next-hop-interface: ens3

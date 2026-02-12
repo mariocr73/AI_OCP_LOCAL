@@ -1,0 +1,85 @@
+---
+# ===========================================================
+# Role: libvirt - Create network and storage pool
+# ===========================================================
+
+# ---- Libvirt Network ----
+
+- name: Check if libvirt network '{{ libvirt_network.name }}' exists
+  ansible.builtin.command:
+    cmd: "virsh net-info {{ libvirt_network.name }}"
+  register: _net_check
+  changed_when: false
+  failed_when: false
+
+- name: Generate libvirt network XML
+  ansible.builtin.template:
+    src: ocp-net.xml.j2
+    dest: "/tmp/{{ libvirt_network.name }}.xml"
+    mode: '0644'
+  when: _net_check.rc != 0
+
+- name: Define libvirt network
+  ansible.builtin.command:
+    cmd: "virsh net-define /tmp/{{ libvirt_network.name }}.xml"
+  when: _net_check.rc != 0
+
+- name: Start libvirt network
+  ansible.builtin.command:
+    cmd: "virsh net-start {{ libvirt_network.name }}"
+  when: _net_check.rc != 0
+
+- name: Set libvirt network to autostart
+  ansible.builtin.command:
+    cmd: "virsh net-autostart {{ libvirt_network.name }}"
+  changed_when: false
+
+- name: Verify libvirt network is active
+  ansible.builtin.command:
+    cmd: "virsh net-info {{ libvirt_network.name }}"
+  register: _net_verify
+  changed_when: false
+  failed_when: "'active' not in _net_verify.stdout.lower() or 'yes' not in _net_verify.stdout.lower()"
+
+# ---- Storage Pool ----
+
+- name: Ensure storage pool directory exists
+  ansible.builtin.file:
+    path: "{{ libvirt_pool.path }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Check if storage pool '{{ libvirt_pool.name }}' exists
+  ansible.builtin.command:
+    cmd: "virsh pool-info {{ libvirt_pool.name }}"
+  register: _pool_check
+  changed_when: false
+  failed_when: false
+
+- name: Define storage pool
+  ansible.builtin.command:
+    cmd: "virsh pool-define-as {{ libvirt_pool.name }} dir - - - - {{ libvirt_pool.path }}"
+  when: _pool_check.rc != 0
+
+- name: Build storage pool
+  ansible.builtin.command:
+    cmd: "virsh pool-build {{ libvirt_pool.name }}"
+  when: _pool_check.rc != 0
+  failed_when: false
+
+- name: Start storage pool
+  ansible.builtin.command:
+    cmd: "virsh pool-start {{ libvirt_pool.name }}"
+  when: _pool_check.rc != 0
+
+- name: Set storage pool to autostart
+  ansible.builtin.command:
+    cmd: "virsh pool-autostart {{ libvirt_pool.name }}"
+  changed_when: false
+
+- name: Cleanup temporary network XML
+  ansible.builtin.file:
+    path: "/tmp/{{ libvirt_network.name }}.xml"
+    state: absent

@@ -1,0 +1,56 @@
+---
+# ===========================================================
+# Role: haproxy - Install and configure HAProxy LB
+# ===========================================================
+# Frontends/backends for:
+#   - 6443  : Kubernetes API
+#   - 22623 : Machine Config Server (Ignition)
+#   - 80    : HTTP Ingress (*.apps)
+#   - 443   : HTTPS Ingress (*.apps)
+# Stats page on port 9000.
+# ===========================================================
+
+# ---- Install ----
+- name: Install HAProxy
+  ansible.builtin.dnf:
+    name: haproxy
+    state: present
+
+# ---- SELinux: allow HAProxy to bind to all ports ----
+- name: Allow HAProxy to connect to any port (SELinux)
+  ansible.builtin.command:
+    cmd: setsebool -P haproxy_connect_any 1
+  changed_when: false
+  when: ansible_selinux.status | default('disabled') == 'enabled'
+
+# ---- Configure ----
+- name: Deploy HAProxy configuration
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: root
+    mode: '0644'
+    backup: true
+    validate: "haproxy -c -f %s"
+  notify: Restart haproxy
+
+# ---- Rsyslog for HAProxy logging ----
+- name: Configure rsyslog for HAProxy
+  ansible.builtin.copy:
+    dest: /etc/rsyslog.d/99-haproxy.conf
+    content: |
+      # HAProxy logging
+      local0.* /var/log/haproxy.log
+      local1.notice /var/log/haproxy-status.log
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart rsyslog
+
+# ---- Enable and start ----
+- name: Enable and start HAProxy
+  ansible.builtin.systemd:
+    name: haproxy
+    state: started
+    enabled: true

@@ -1,0 +1,104 @@
+# ===========================================================
+# dnsmasq configuration for OCP {{ cluster_name }}.{{ base_domain }}
+# Managed by Ansible - do not edit manually
+# ===========================================================
+
+# ---- General settings ----
+strict-order
+bind-dynamic
+bogus-priv
+domain-needed
+expand-hosts
+no-resolv
+
+# ---- Listen interface ----
+# {{ bastion.nic }} is the bastion's NIC on the OCP network
+interface={{ bastion.nic }}
+listen-address={{ bastion.ip }}
+listen-address=127.0.0.1
+
+# ---- Domain ----
+domain={{ cluster_name }}.{{ base_domain }}
+local=/{{ cluster_name }}.{{ base_domain }}/
+
+# ===========================================================
+# DNS SECTION
+# ===========================================================
+
+# ---- API VIP (api and api-int) ----
+# Points to the HAProxy VIP that load-balances 6443/22623
+address=/api.{{ cluster_name }}.{{ base_domain }}/{{ api_vip }}
+address=/api-int.{{ cluster_name }}.{{ base_domain }}/{{ api_vip }}
+
+# ---- Ingress VIP (wildcard *.apps) ----
+# Points to the HAProxy VIP that load-balances 80/443
+address=/.apps.{{ cluster_name }}.{{ base_domain }}/{{ ingress_vip }}
+
+# ---- Master nodes (forward A records) ----
+{% for master in masters %}
+address=/{{ master.name }}.{{ cluster_name }}.{{ base_domain }}/{{ master.ip }}
+{% endfor %}
+
+# ---- Bastion (forward A record) ----
+address=/{{ bastion.host }}.{{ cluster_name }}.{{ base_domain }}/{{ bastion.ip }}
+
+# ---- Etcd SRV records (for internal cluster use) ----
+{% for master in masters %}
+srv-host=_etcd-server-ssl._tcp.{{ cluster_name }}.{{ base_domain }},{{ master.name }}.{{ cluster_name }}.{{ base_domain }},2380,0,10
+{% endfor %}
+
+# ---- Reverse DNS (PTR records) ----
+# Derived from CIDR: {{ libvirt_network.cidr }}
+{% set octets = libvirt_network.gw.split('.') %}
+{% set reverse_zone = octets[2] ~ '.' ~ octets[1] ~ '.' ~ octets[0] %}
+
+{% for master in masters %}
+{% set last_octet = master.ip.split('.')[-1] %}
+ptr-record={{ last_octet }}.{{ reverse_zone }}.in-addr.arpa,{{ master.name }}.{{ cluster_name }}.{{ base_domain }}
+{% endfor %}
+
+# API VIP PTR
+{% set api_last = api_vip.split('.')[-1] %}
+ptr-record={{ api_last }}.{{ reverse_zone }}.in-addr.arpa,api.{{ cluster_name }}.{{ base_domain }}
+
+# Ingress VIP PTR
+{% set ingress_last = ingress_vip.split('.')[-1] %}
+ptr-record={{ ingress_last }}.{{ reverse_zone }}.in-addr.arpa,apps.{{ cluster_name }}.{{ base_domain }}
+
+# Bastion PTR
+{% set bastion_last = bastion.ip.split('.')[-1] %}
+ptr-record={{ bastion_last }}.{{ reverse_zone }}.in-addr.arpa,{{ bastion.host }}.{{ cluster_name }}.{{ base_domain }}
+
+# ---- Upstream DNS servers ----
+{% for upstream in upstream_dns | default(['8.8.8.8', '8.8.4.4']) %}
+server={{ upstream }}
+{% endfor %}
+
+# ===========================================================
+# DHCP SECTION
+# ===========================================================
+
+# ---- DHCP range for unknown hosts ----
+# Limited range .200-.250 for transient clients; masters use reservations
+{% set net_prefix = libvirt_network.cidr.split('.')[0:3] | join('.') %}
+dhcp-range={{ net_prefix }}.200,{{ net_prefix }}.250,24h
+
+# ---- DHCP Option 3: Default gateway ----
+dhcp-option=3,{{ libvirt_network.gw }}
+
+# ---- DHCP Option 6: DNS server ----
+dhcp-option=6,{{ bastion.dns }}
+
+# ---- NTP: configured via Assisted Installer (additional_ntp_source) ----
+# DHCP option 42 requires IPs, not hostnames; NTP is set in the ISO config
+
+# ---- DHCP reservations by MAC address (master nodes) ----
+{% for master in masters %}
+dhcp-host={{ master.mac }},{{ master.ip }},{{ master.name }},infinite
+{% endfor %}
+
+# ===========================================================
+# LOGGING (via syslog/journald)
+# ===========================================================
+log-queries
+log-dhcp

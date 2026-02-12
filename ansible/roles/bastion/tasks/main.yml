@@ -1,0 +1,109 @@
+---
+# ===========================================================
+# Role: bastion - Base configuration for bastion/utility VM
+# ===========================================================
+# Installs required packages, enables ip_forward, configures
+# firewalld for DNS/DHCP/HAProxy ports. Supports Fedora + RHEL.
+# ===========================================================
+
+- name: Detect bastion OS
+  ansible.builtin.set_fact:
+    _bastion_os: "{{ 'fedora' if ansible_distribution == 'Fedora' else 'rhel' }}"
+
+# ---- Packages ----
+- name: Install bastion packages
+  ansible.builtin.dnf:
+    name:
+      - dnsmasq
+      - haproxy
+      - bind-utils
+      - net-tools
+      - curl
+      - jq
+      - tcpdump
+      - nmap-ncat
+      - policycoreutils-python-utils
+      - chrony
+    state: present
+
+# ---- Sysctl: IP forwarding ----
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    sysctl_set: true
+    state: present
+    reload: true
+
+# ---- NTP (chrony) ----
+- name: Configure NTP servers in chrony
+  ansible.builtin.lineinfile:
+    path: /etc/chrony.conf
+    regexp: "^server {{ item }}"
+    line: "server {{ item }} iburst"
+    state: present
+  loop: "{{ ntp_servers }}"
+  notify: Restart chronyd
+
+- name: Enable and start chronyd
+  ansible.builtin.systemd:
+    name: chronyd
+    state: started
+    enabled: true
+
+# ---- Firewalld ----
+- name: Ensure firewalld is running
+  ansible.builtin.systemd:
+    name: firewalld
+    state: started
+    enabled: true
+
+- name: Open firewall ports for OCP services
+  ansible.posix.firewalld:
+    port: "{{ item }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+  loop:
+    - "53"
+    - "6443"
+    - "22623"
+    - "80"
+    - "443"
+    - "9000"
+
+- name: Open firewall for DNS/DHCP (UDP)
+  ansible.posix.firewalld:
+    port: "{{ item }}/udp"
+    permanent: true
+    state: enabled
+    immediate: true
+  loop:
+    - "53"
+    - "67"
+    - "68"
+
+# ---- SELinux ----
+- name: Allow HAProxy to bind to non-standard ports (SELinux)
+  ansible.builtin.command:
+    cmd: "setsebool -P haproxy_connect_any 1"
+  changed_when: false
+  when: ansible_selinux.status | default('disabled') == 'enabled'
+
+- name: Allow dnsmasq to bind to DHCP port (SELinux)
+  ansible.builtin.command:
+    cmd: "setsebool -P dnsmasq_disable_trans 0"
+  changed_when: false
+  failed_when: false
+  when: ansible_selinux.status | default('disabled') == 'enabled'
+
+# ---- Validation ----
+- name: Verify NTP synchronization
+  ansible.builtin.command:
+    cmd: chronyc tracking
+  register: _ntp_status
+  changed_when: false
+
+- name: Display NTP status
+  ansible.builtin.debug:
+    msg: "{{ _ntp_status.stdout_lines[:3] }}"

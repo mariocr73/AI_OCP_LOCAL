@@ -1,0 +1,12 @@
+<network>
+  <name>{{ libvirt_network.name }}</name>
+  <forward mode='nat'>
+    <nat>
+      <port start='1024' end='65535'/>
+    </nat>
+  </forward>
+  <bridge name='{{ libvirt_network.bridge | default("virbr-ocp") }}' stp='on' delay='0'/>
+  <!-- No DHCP defined here: bastion VM provides DHCP via dnsmasq -->
+  <ip address='{{ libvirt_network.gw }}' netmask='255.255.255.0'>
+  </ip>
+</network>

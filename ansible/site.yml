@@ -1,0 +1,27 @@
+---
+# ===========================================================
+# OCP 4.20 Compact Cluster - Master Playbook
+# ===========================================================
+# Usage:
+#   Full run:    ansible-playbook site.yml -i inventory/hosts.ini
+#   Single phase: ansible-playbook site.yml -i inventory/hosts.ini --tags assisted
+#   Dry run:     ansible-playbook site.yml -i inventory/hosts.ini --check --diff
+# ===========================================================
+
+- import_playbook: 01_prepare_host.yml
+  tags: [prepare]
+
+- import_playbook: 02_network.yml
+  tags: [network]
+
+- import_playbook: 03_bastion.yml
+  tags: [bastion]
+
+- import_playbook: 04_services.yml
+  tags: [services]
+
+- import_playbook: 05_assisted.yml
+  tags: [assisted]
+
+- import_playbook: 06_post.yml
+  tags: [post]

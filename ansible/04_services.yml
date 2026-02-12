@@ -1,0 +1,41 @@
+---
+# ===========================================================
+# 04 - Configure HAProxy load balancer on bastion
+# ===========================================================
+
+- name: Configure HAProxy on bastion
+  hosts: bastion
+  become: true
+  gather_facts: true
+  tags: [services, haproxy]
+
+  roles:
+    - role: haproxy
+      tags: [haproxy]
+
+  post_tasks:
+    # ---- Validation: HAProxy ports ----
+    - name: Verify HAProxy is listening on required ports
+      ansible.builtin.wait_for:
+        host: "{{ bastion.ip }}"
+        port: "{{ item }}"
+        timeout: 10
+      loop:
+        - "{{ haproxy_backend_port.api }}"
+        - "{{ haproxy_backend_port.ignition }}"
+        - "{{ haproxy_backend_port.ingress_http }}"
+        - "{{ haproxy_backend_port.ingress_https }}"
+      loop_control:
+        label: "port {{ item }}"
+
+    - name: Verify HAProxy stats page
+      ansible.builtin.uri:
+        url: "http://{{ bastion.ip }}:9000/haproxy_stats"
+        method: GET
+        status_code: 200
+      register: haproxy_stats
+      failed_when: false
+
+    - name: Display HAProxy validation
+      ansible.builtin.debug:
+        msg: "HAProxy stats page: {{ 'OK' if haproxy_stats.status == 200 else 'UNREACHABLE' }}"

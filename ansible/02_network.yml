@@ -1,0 +1,15 @@
+---
+# ===========================================================
+# 02 - Create libvirt network and storage pool
+# ===========================================================
+
+- name: Configure libvirt network and storage pool
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  tags: [network]
+
+  roles:
+    - role: libvirt
+      tags: [libvirt]

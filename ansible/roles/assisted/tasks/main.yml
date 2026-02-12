@@ -1,0 +1,435 @@
+---
+# ===========================================================
+# Role: assisted - Assisted Installer API workflow
+# ===========================================================
+# Full lifecycle via console.redhat.com Assisted Service:
+#   1. Authenticate (offline token → access token)
+#   2. Create cluster
+#   3. Create infra-env (generates Discovery ISO)
+#   4. Download Discovery ISO
+#   5. Create master VMs (boot from ISO)
+#   6. Wait for hosts to register
+#   7. Set host roles and validate
+#   8. Start installation
+#   9. Wait for completion
+#  10. Download kubeconfig
+#
+# Secrets are read from files; values are never logged.
+# ===========================================================
+
+# ============================================================
+# STEP 1: Read secrets and authenticate
+# ============================================================
+
+- name: Read pull secret from file
+  ansible.builtin.slurp:
+    src: "{{ pull_secret_file }}"
+  register: _pull_secret_raw
+  no_log: true
+
+- name: Read offline token from file
+  ansible.builtin.slurp:
+    src: "{{ offline_token_file }}"
+  register: _offline_token_raw
+  no_log: true
+
+- name: Set decoded secret facts
+  ansible.builtin.set_fact:
+    _pull_secret: "{{ _pull_secret_raw.content | b64decode | trim }}"
+    _offline_token: "{{ (_offline_token_raw.content | b64decode).strip() }}"
+  no_log: true
+
+- name: Exchange offline token for access token (Red Hat SSO)
+  ansible.builtin.uri:
+    url: "{{ sso_url }}"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      grant_type: refresh_token
+      client_id: cloud-services
+      refresh_token: "{{ _offline_token }}"
+    status_code: 200
+    return_content: true
+  register: _sso_response
+  no_log: true
+
+- name: Set access token fact
+  ansible.builtin.set_fact:
+    _access_token: "{{ _sso_response.json.access_token }}"
+  no_log: true
+
+- name: Confirm authentication
+  ansible.builtin.debug:
+    msg: "Successfully authenticated with Red Hat SSO (token hidden)"
+
+# ============================================================
+# STEP 2: Create cluster (idempotent)
+# ============================================================
+
+- name: List existing clusters
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/clusters"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+    status_code: 200
+    return_content: true
+  register: _existing_clusters
+  no_log: true
+
+- name: Find existing cluster by name and domain
+  ansible.builtin.set_fact:
+    _cluster_id: >-
+      {{ (_existing_clusters.json |
+          selectattr('name', 'equalto', cluster_name) |
+          selectattr('base_dns_domain', 'equalto', base_domain) |
+          map(attribute='id') | list | first | default('')) }}
+
+- name: Create cluster via Assisted Installer API
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/clusters"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "{{ cluster_name }}"
+      openshift_version: "{{ ocp_version }}"
+      base_dns_domain: "{{ base_domain }}"
+      high_availability_mode: "Full"
+      schedulable_masters: true
+      user_managed_networking: true
+      vip_dhcp_allocation: false
+      api_vips:
+        - ip: "{{ api_vip }}"
+      ingress_vips:
+        - ip: "{{ ingress_vip }}"
+      pull_secret: "{{ _pull_secret }}"
+      ssh_public_key: "{{ ssh_pubkey }}"
+      network_type: "OVNKubernetes"
+      additional_ntp_source: "{{ ntp_servers | join(',') }}"
+    status_code: 201
+    return_content: true
+  register: _create_cluster
+  when: _cluster_id == ''
+  no_log: true
+
+- name: Set cluster ID from creation response
+  ansible.builtin.set_fact:
+    _cluster_id: "{{ _create_cluster.json.id }}"
+  when: _cluster_id == ''
+
+- name: Confirm cluster registration
+  ansible.builtin.debug:
+    msg: "Cluster registered with Assisted Service (ID hidden)"
+
+# ============================================================
+# STEP 3: Create infra-env and Discovery ISO (idempotent)
+# ============================================================
+
+- name: List existing infra-envs for this cluster
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/infra-envs"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+    status_code: 200
+    return_content: true
+  register: _existing_infra_envs
+  no_log: true
+
+- name: Find existing infra-env for cluster
+  ansible.builtin.set_fact:
+    _infra_env_id: >-
+      {{ (_existing_infra_envs.json |
+          selectattr('cluster_id', 'equalto', _cluster_id) |
+          map(attribute='id') | list | first | default('')) }}
+
+# ---- Build static network config (if enabled) ----
+- name: Initialize static network config list
+  ansible.builtin.set_fact:
+    _static_network_config: []
+  when: discovery_iso_params.static_network_config | default(false)
+
+- name: Build static network entry for each master
+  ansible.builtin.set_fact:
+    _static_network_config: >-
+      {{ _static_network_config + [{
+        'mac_interface_map': [{'mac_address': item.mac, 'logical_nic_name': 'ens3'}],
+        'network_yaml': lookup('template', 'nmstate.yml.j2')
+      }] }}
+  loop: "{{ masters }}"
+  when: discovery_iso_params.static_network_config | default(false)
+
+# ---- Build proxy config ----
+- name: Build proxy config
+  ansible.builtin.set_fact:
+    _proxy_config: >-
+      {{ {
+        'http_proxy': discovery_iso_params.proxy.http,
+        'https_proxy': discovery_iso_params.proxy.https
+      } if (discovery_iso_params.proxy.http | default('') != '' or
+            discovery_iso_params.proxy.https | default('') != '') else omit }}
+
+# ---- Create infra-env ----
+- name: Create infra-env via Assisted Installer API
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/infra-envs"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "{{ cluster_name }}-infra-env"
+      cluster_id: "{{ _cluster_id }}"
+      pull_secret: "{{ _pull_secret }}"
+      ssh_authorized_key: "{{ ssh_pubkey }}"
+      image_type: "full-iso"
+      static_network_config: "{{ _static_network_config | default(omit) }}"
+      proxy: "{{ _proxy_config | default(omit) }}"
+      additional_ntp_sources: "{{ ntp_servers | join(',') }}"
+    status_code: 201
+    return_content: true
+  register: _create_infra_env
+  when: _infra_env_id == ''
+  no_log: true
+
+- name: Set infra-env ID
+  ansible.builtin.set_fact:
+    _infra_env_id: "{{ _create_infra_env.json.id }}"
+  when: _infra_env_id == ''
+
+# ============================================================
+# STEP 4: Download Discovery ISO
+# ============================================================
+
+- name: Get Discovery ISO download URL
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/infra-envs/{{ _infra_env_id }}/downloads/image-url"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+    status_code: 200
+    return_content: true
+  register: _iso_url_response
+
+- name: Check if Discovery ISO already exists
+  ansible.builtin.stat:
+    path: "{{ iso_dir }}/discovery-image.iso"
+  register: _iso_file
+
+- name: Download Discovery ISO
+  ansible.builtin.get_url:
+    url: "{{ _iso_url_response.json.url }}"
+    dest: "{{ iso_dir }}/discovery-image.iso"
+    mode: '0644'
+    timeout: 600
+  when: not _iso_file.stat.exists | default(false)
+
+- name: Verify Discovery ISO was downloaded
+  ansible.builtin.stat:
+    path: "{{ iso_dir }}/discovery-image.iso"
+  register: _iso_verify
+  failed_when: not _iso_verify.stat.exists
+
+# ============================================================
+# STEP 5: Create master VMs (boot from Discovery ISO)
+# ============================================================
+
+- name: Check if master VMs already exist
+  ansible.builtin.command:
+    cmd: "virsh dominfo {{ item.name }}"
+  loop: "{{ masters }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _master_vm_checks
+  changed_when: false
+  failed_when: false
+
+- name: Create master VMs via virt-install
+  ansible.builtin.command:
+    cmd: >
+      virt-install
+      --name {{ item.item.name }}
+      --cpu host-passthrough
+      --vcpus {{ item.item.cpu }}
+      --memory {{ item.item.ram_gb * 1024 }}
+      --disk path={{ iso_dir }}/{{ item.item.name }}.qcow2,size={{ item.item.disk_gb }},format=qcow2,bus=virtio,cache=none
+      --cdrom {{ iso_dir }}/discovery-image.iso
+      --network network={{ libvirt_network.name }},mac={{ item.item.mac }},model=virtio
+      --os-variant rhel9-unknown
+      --boot hd,cdrom
+      --graphics vnc,listen=0.0.0.0
+      --noautoconsole
+  loop: "{{ _master_vm_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.rc != 0
+
+- name: Start master VMs (if not already running)
+  ansible.builtin.command:
+    cmd: "virsh start {{ item.name }}"
+  loop: "{{ masters }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _start_masters
+  changed_when: "'started' in _start_masters.stdout | default('')"
+  failed_when: false
+
+# ============================================================
+# STEP 6: Wait for hosts to register with Assisted Service
+# ============================================================
+
+- name: Wait for all hosts to register
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/clusters/{{ _cluster_id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+    status_code: 200
+    return_content: true
+  register: _cluster_status
+  until: >-
+    (_cluster_status.json.hosts | default([]) | length) >= (masters | length)
+  retries: "{{ (assisted_host_discovery_timeout | int / assisted_poll_interval | int) | int }}"
+  delay: "{{ assisted_poll_interval }}"
+  no_log: true
+
+- name: Display discovered hosts count
+  ansible.builtin.debug:
+    msg: "Discovered {{ _cluster_status.json.hosts | length }} / {{ masters | length }} hosts"
+
+# ============================================================
+# STEP 7: Set host roles to 'master'
+# ============================================================
+
+- name: Set host roles to master
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/infra-envs/{{ _infra_env_id }}/hosts/{{ item.id }}"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      host_role: "master"
+    status_code: 201
+    return_content: true
+  loop: "{{ _cluster_status.json.hosts }}"
+  loop_control:
+    label: "host-{{ item.requested_hostname | default(item.id[:8]) }}"
+  no_log: true
+
+# ============================================================
+# STEP 8: Wait for cluster to be ready to install
+# ============================================================
+
+- name: Wait for cluster status 'ready'
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/clusters/{{ _cluster_id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+    status_code: 200
+    return_content: true
+  register: _cluster_ready
+  until: _cluster_ready.json.status == 'ready'
+  retries: "{{ (assisted_host_discovery_timeout | int / assisted_poll_interval | int) | int }}"
+  delay: "{{ assisted_poll_interval }}"
+  no_log: true
+
+- name: Display cluster readiness
+  ansible.builtin.debug:
+    msg: "Cluster status: {{ _cluster_ready.json.status }} — ready to install"
+
+# ============================================================
+# STEP 9: Start installation
+# ============================================================
+
+- name: Start cluster installation
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/clusters/{{ _cluster_id }}/actions/install"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+    status_code: 202
+    return_content: true
+  register: _install_start
+  no_log: true
+
+- name: Confirm installation started
+  ansible.builtin.debug:
+    msg: "Installation started — polling for completion"
+
+# ============================================================
+# STEP 10: Wait for installation to complete
+# ============================================================
+
+- name: Wait for installation to complete
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/clusters/{{ _cluster_id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+    status_code: 200
+    return_content: true
+  register: _install_status
+  until: _install_status.json.status in ['installed', 'error', 'cancelled']
+  retries: "{{ (assisted_install_timeout | int / assisted_poll_interval | int) | int }}"
+  delay: "{{ assisted_poll_interval }}"
+  no_log: true
+
+- name: Fail if installation did not succeed
+  ansible.builtin.fail:
+    msg: "Installation failed with status: {{ _install_status.json.status }}. Check console.redhat.com for details."
+  when: _install_status.json.status != 'installed'
+
+- name: Installation completed successfully
+  ansible.builtin.debug:
+    msg: "OCP {{ ocp_version }} cluster '{{ cluster_name }}' installed successfully"
+
+# ============================================================
+# STEP 11: Download kubeconfig
+# ============================================================
+
+- name: Ensure kubeconfig output directory exists
+  ansible.builtin.file:
+    path: "{{ kubeconfig_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: Download kubeconfig
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/clusters/{{ _cluster_id }}/downloads/credentials?file_name=kubeconfig"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+    dest: "{{ kubeconfig_dir }}/kubeconfig"
+    status_code: 200
+  no_log: true
+
+- name: Set kubeconfig permissions
+  ansible.builtin.file:
+    path: "{{ kubeconfig_dir }}/kubeconfig"
+    mode: '0600'
+
+- name: Download kubeadmin password
+  ansible.builtin.uri:
+    url: "{{ assisted_service_api }}/clusters/{{ _cluster_id }}/downloads/credentials?file_name=kubeadmin-password"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _access_token }}"
+    dest: "{{ kubeconfig_dir }}/kubeadmin-password"
+    status_code: 200
+  no_log: true
+
+- name: Set kubeadmin-password permissions
+  ansible.builtin.file:
+    path: "{{ kubeconfig_dir }}/kubeadmin-password"
+    mode: '0600'
+
+- name: Display kubeconfig location
+  ansible.builtin.debug:
+    msg: "Kubeconfig saved to {{ kubeconfig_dir }}/kubeconfig"

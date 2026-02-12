@@ -1,0 +1,14 @@
+---
+# ===========================================================
+# 06 - Post-installation verification
+# ===========================================================
+
+- name: Post-installation verification
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [post]
+
+  roles:
+    - role: postinstall
+      tags: [postinstall]

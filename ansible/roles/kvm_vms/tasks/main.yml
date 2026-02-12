@@ -1,0 +1,146 @@
+---
+# ===========================================================
+# Role: kvm_vms - Create bastion VM with cloud-init
+# ===========================================================
+# Creates a bastion VM from a cloud base image (Fedora/RHEL).
+# Uses cloud-init (NoCloud datasource) for initial config:
+#   - root password disabled, SSH key injected
+#   - static IP, hostname, timezone
+#
+# Set bastion_create_vm: false in group_vars to skip.
+# ===========================================================
+
+- name: Skip bastion VM creation if disabled
+  ansible.builtin.debug:
+    msg: "bastion_create_vm is false - skipping VM creation"
+  when: not (bastion_create_vm | default(true))
+
+- name: Check if bastion VM already exists
+  ansible.builtin.command:
+    cmd: "virsh dominfo {{ bastion.host }}"
+  register: _bastion_vm_check
+  changed_when: false
+  failed_when: false
+  when: bastion_create_vm | default(true)
+
+- name: Bastion VM provisioning block
+  when:
+    - bastion_create_vm | default(true)
+    - _bastion_vm_check.rc != 0
+  block:
+
+    # ---- Verify base image exists ----
+    - name: Verify base image exists
+      ansible.builtin.stat:
+        path: "{{ bastion_vm.base_image }}"
+      register: _base_image
+      failed_when: not _base_image.stat.exists
+
+    # ---- Create bastion disk from base image ----
+    - name: Create bastion disk from base image
+      ansible.builtin.command:
+        cmd: >
+          qemu-img create -f qcow2 -F qcow2
+          -b {{ bastion_vm.base_image }}
+          {{ iso_dir }}/{{ bastion.host }}.qcow2
+          {{ bastion_vm.disk_gb }}G
+        creates: "{{ iso_dir }}/{{ bastion.host }}.qcow2"
+
+    # ---- Cloud-init user-data ----
+    - name: Create cloud-init directory
+      ansible.builtin.file:
+        path: "/tmp/cloud-init-{{ bastion.host }}"
+        state: directory
+        mode: '0755'
+
+    - name: Generate cloud-init meta-data
+      ansible.builtin.copy:
+        dest: "/tmp/cloud-init-{{ bastion.host }}/meta-data"
+        mode: '0644'
+        content: |
+          instance-id: {{ bastion.host }}
+          local-hostname: {{ bastion.host }}
+
+    - name: Generate cloud-init user-data
+      ansible.builtin.copy:
+        dest: "/tmp/cloud-init-{{ bastion.host }}/user-data"
+        mode: '0644'
+        content: |
+          #cloud-config
+          hostname: {{ bastion.host }}
+          fqdn: {{ bastion.host }}.{{ cluster_name }}.{{ base_domain }}
+          manage_etc_hosts: true
+          ssh_authorized_keys:
+            - {{ ssh_pubkey }}
+          disable_root: false
+          ssh_pwauth: false
+          timezone: UTC
+          packages:
+            - qemu-guest-agent
+          runcmd:
+            - systemctl enable --now qemu-guest-agent
+
+    - name: Generate cloud-init network-config
+      ansible.builtin.copy:
+        dest: "/tmp/cloud-init-{{ bastion.host }}/network-config"
+        mode: '0644'
+        content: |
+          version: 2
+          ethernets:
+            ens3:
+              addresses:
+                - {{ bastion.ip }}/{{ libvirt_network.prefix | default(24) }}
+              gateway4: {{ bastion.gw }}
+              nameservers:
+                addresses:
+                  - {{ bastion.gw }}
+                  - 8.8.8.8
+                search:
+                  - {{ cluster_name }}.{{ base_domain }}
+
+    # ---- Create cloud-init ISO ----
+    - name: Create cloud-init ISO (NoCloud datasource)
+      ansible.builtin.command:
+        cmd: >
+          genisoimage -output {{ iso_dir }}/{{ bastion.host }}-cidata.iso
+          -volid cidata -joliet -rock
+          /tmp/cloud-init-{{ bastion.host }}/meta-data
+          /tmp/cloud-init-{{ bastion.host }}/user-data
+          /tmp/cloud-init-{{ bastion.host }}/network-config
+        creates: "{{ iso_dir }}/{{ bastion.host }}-cidata.iso"
+
+    # ---- Create bastion VM ----
+    - name: Create bastion VM via virt-install
+      ansible.builtin.command:
+        cmd: >
+          virt-install
+          --name {{ bastion.host }}
+          --cpu host-passthrough
+          --vcpus {{ bastion_vm.cpu }}
+          --memory {{ bastion_vm.ram_mb }}
+          --disk path={{ iso_dir }}/{{ bastion.host }}.qcow2,format=qcow2,bus=virtio
+          --disk path={{ iso_dir }}/{{ bastion.host }}-cidata.iso,device=cdrom
+          --network network={{ libvirt_network.name }},model=virtio
+          --os-variant {{ bastion_vm.os_variant }}
+          --graphics none
+          --noautoconsole
+          --import
+
+    # ---- Wait for VM to boot ----
+    - name: Wait for bastion VM to obtain its IP
+      ansible.builtin.pause:
+        seconds: 30
+
+    # ---- Cleanup ----
+    - name: Remove temporary cloud-init files
+      ansible.builtin.file:
+        path: "/tmp/cloud-init-{{ bastion.host }}"
+        state: absent
+
+- name: Ensure bastion VM is running
+  ansible.builtin.command:
+    cmd: "virsh start {{ bastion.host }}"
+  register: _start_result
+  changed_when: "'started' in _start_result.stdout | default('')"
+  failed_when: false
+  when: bastion_create_vm | default(true)

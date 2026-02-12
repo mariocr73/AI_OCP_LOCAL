@@ -1,0 +1,99 @@
+---
+# ===========================================================
+# OCP 4.20 Compact Cluster - Consolidated Variables
+# ===========================================================
+# IMPORTANT: Edit all <PLACEHOLDER> values before running.
+# Secrets (pull_secret, offline_token) are read from files
+# and never stored in this repository.
+# ===========================================================
+
+# ----- Cluster identity -----
+ocp_version: "4.20"
+cluster_name: "ocp"
+base_domain: "local.lab"
+
+# ----- Virtual IPs (managed by OCP keepalived) -----
+api_vip: "192.168.122.10"
+ingress_vip: "192.168.122.11"
+
+# ----- NTP -----
+ntp_servers:
+  - "time.cloudflare.com"
+  - "pool.ntp.org"
+
+# ----- Bastion / Utility VM -----
+bastion_os: "rhel"
+bastion:
+  host: "bastion"
+  ip: "192.168.122.5"
+  nic: "enp1s0"                              # NIC inside the bastion VM
+  gw: "192.168.122.1"
+  dns: "192.168.122.5"                       # bastion is its own DNS
+
+# Bastion VM provisioning (set bastion_create_vm: false for pre-existing VM)
+bastion_create_vm: false                     # Using pre-existing RHEL 9.7 VM
+bastion_vm:
+  cpu: 2
+  ram_mb: 4096
+  disk_gb: 100
+  os_variant: "rhel9-unknown"
+  base_image: "<RHEL_QCOW2_PATH>"              # e.g. "/home/user/VirtualMachines/rhel9.7.qcow2"
+
+# ----- Libvirt network -----
+libvirt_network:
+  name: "ocp-net"
+  bridge: "virbr-ocp"
+  cidr: "192.168.122.0/24"
+  prefix: 24
+  gw: "192.168.122.1"                        # hypervisor IP on this network
+
+# ----- Storage -----
+iso_dir: "/var/lib/libvirt/images"
+libvirt_pool:
+  name: "ocp-pool"
+  path: "/var/lib/libvirt/images"
+
+# ----- Master nodes (control-plane) -----
+masters:
+  - { name: "master-0", mac: "52:54:00:aa:bb:01", ip: "192.168.122.101", cpu: 4, ram_gb: 16, disk_gb: 120 }
+  - { name: "master-1", mac: "52:54:00:aa:bb:02", ip: "192.168.122.102", cpu: 4, ram_gb: 16, disk_gb: 120 }
+  - { name: "master-2", mac: "52:54:00:aa:bb:03", ip: "192.168.122.103", cpu: 4, ram_gb: 16, disk_gb: 120 }
+
+# ----- SSH -----
+ssh_pubkey: "<YOUR_SSH_PUBKEY>"                # e.g. "ssh-ed25519 AAAA... user@host"
+
+# ----- Secrets (file paths - NEVER commit these files) -----
+pull_secret_file: "<PULL_SECRET_PATH>"          # e.g. "/home/user/Downloads/pull-secret.json"
+offline_token_file: "<OFFLINE_TOKEN_PATH>"      # e.g. "/home/user/.ocp-offline-token"
+
+# ----- Discovery ISO parameters -----
+discovery_iso_params:
+  static_network_config: true                # embed NMState static IPs in ISO
+  proxy:
+    http: ""                                 # e.g. "http://proxy:3128"
+    https: ""
+
+# ----- Assisted Installer API -----
+assisted_service: "console.redhat.com"
+assisted_service_api: "https://api.openshift.com/api/assisted-install/v2"
+sso_url: "https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token"
+
+# ----- HAProxy ports -----
+haproxy_backend_port:
+  api: 6443
+  ignition: 22623
+  ingress_http: 80
+  ingress_https: 443
+
+# ----- DNS -----
+upstream_dns:
+  - "8.8.8.8"
+  - "8.8.4.4"
+
+# ----- Kubeconfig output -----
+kubeconfig_dir: "{{ playbook_dir }}/../output"
+
+# ----- Timeouts (seconds) -----
+assisted_host_discovery_timeout: 1800        # 30 min for hosts to register
+assisted_install_timeout: 5400               # 90 min for installation
+assisted_poll_interval: 30                   # seconds between status polls

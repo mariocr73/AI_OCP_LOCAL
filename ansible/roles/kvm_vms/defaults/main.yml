@@ -1,0 +1,12 @@
+---
+# Defaults for kvm_vms role
+# Override in group_vars/all.yml
+
+bastion_create_vm: true
+
+bastion_vm:
+  cpu: 2
+  ram_mb: 4096
+  disk_gb: 50
+  os_variant: "fedora-unknown"
+  base_image: "/var/lib/libvirt/images/fedora-cloud-base.qcow2"

@@ -1,0 +1,10 @@
+---
+# Defaults for the assisted role
+# Override in group_vars/all.yml
+
+assisted_service_api: "https://api.openshift.com/api/assisted-install/v2"
+sso_url: "https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token"
+
+assisted_host_discovery_timeout: 1800
+assisted_install_timeout: 5400
+assisted_poll_interval: 30

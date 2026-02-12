@@ -1,0 +1,77 @@
+---
+# ===========================================================
+# 03 - Provision and configure bastion / utility VM
+# ===========================================================
+# Play 1: Create bastion VM on the hypervisor (skip if exists).
+# Play 2: Configure bastion services (dnsmasq DNS + DHCP).
+# ===========================================================
+
+- name: Create bastion VM on hypervisor
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  tags: [bastion, bastion_vm]
+
+  roles:
+    - role: kvm_vms
+      tags: [bastion_vm]
+
+- name: Wait for bastion SSH to become available
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [bastion, bastion_config]
+
+  tasks:
+    - name: Wait for bastion SSH
+      ansible.builtin.wait_for:
+        host: "{{ bastion.ip }}"
+        port: 22
+        delay: 10
+        timeout: 300
+      when: bastion_create_vm | default(true)
+
+- name: Configure bastion base services
+  hosts: bastion
+  become: true
+  gather_facts: true
+  tags: [bastion, bastion_config]
+
+  roles:
+    - role: bastion
+      tags: [bastion_base]
+    - role: dns
+      tags: [dns]
+    - role: dhcp
+      tags: [dhcp]
+
+  post_tasks:
+    # ---- Validation: DNS ----
+    - name: Validate DNS resolution for API VIP
+      ansible.builtin.command:
+        cmd: "dig @{{ bastion.ip }} api.{{ cluster_name }}.{{ base_domain }} +short"
+      register: dns_api_check
+      changed_when: false
+      failed_when: "api_vip not in dns_api_check.stdout"
+
+    - name: Validate DNS resolution for apps wildcard
+      ansible.builtin.command:
+        cmd: "dig @{{ bastion.ip }} test.apps.{{ cluster_name }}.{{ base_domain }} +short"
+      register: dns_apps_check
+      changed_when: false
+      failed_when: "ingress_vip not in dns_apps_check.stdout"
+
+    - name: Validate reverse DNS for first master
+      ansible.builtin.command:
+        cmd: "dig @{{ bastion.ip }} -x {{ masters[0].ip }} +short"
+      register: dns_ptr_check
+      changed_when: false
+      failed_when: "masters[0].name not in dns_ptr_check.stdout"
+
+    - name: Display DNS validation results
+      ansible.builtin.debug:
+        msg:
+          - "API VIP DNS:  {{ dns_api_check.stdout | trim }}"
+          - "Apps DNS:     {{ dns_apps_check.stdout | trim }}"
+          - "PTR master-0: {{ dns_ptr_check.stdout | trim }}"

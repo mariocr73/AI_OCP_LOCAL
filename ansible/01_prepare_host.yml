@@ -1,0 +1,131 @@
+---
+# ===========================================================
+# 01 - Prepare KVM/libvirt hypervisor host
+# ===========================================================
+# Detects Fedora vs RHEL and installs the correct packages.
+# Enables libvirtd, configures firewalld and SELinux.
+# ===========================================================
+
+- name: Prepare KVM/libvirt hypervisor host
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  tags: [prepare]
+
+  tasks:
+
+    # ---- OS detection ----
+    - name: Detect OS family
+      ansible.builtin.set_fact:
+        host_os: "{{ 'fedora' if ansible_distribution == 'Fedora' else 'rhel' }}"
+
+    - name: Display detected OS
+      ansible.builtin.debug:
+        msg: "Detected OS: {{ ansible_distribution }} {{ ansible_distribution_version }} → host_os={{ host_os }}"
+
+    # ---- Packages (Fedora) ----
+    - name: Install KVM and libvirt packages (Fedora)
+      ansible.builtin.dnf:
+        name:
+          - qemu-kvm
+          - libvirt
+          - libvirt-daemon-kvm
+          - libvirt-client
+          - virt-install
+          - virt-manager
+          - libguestfs-tools
+          - podman
+          - python3-lxml
+          - python3-libvirt
+          - python3-requests
+          - genisoimage
+          - curl
+          - jq
+          - bind-utils
+          - nmstate
+        state: present
+      when: host_os == 'fedora'
+
+    # ---- Packages (RHEL) ----
+    - name: Install KVM and libvirt packages (RHEL)
+      ansible.builtin.dnf:
+        name:
+          - qemu-kvm
+          - libvirt
+          - libvirt-daemon-kvm
+          - libvirt-client
+          - virt-install
+          - virt-manager
+          - libguestfs-tools
+          - podman
+          - python3-lxml
+          - python3-libvirt
+          - python3-requests
+          - genisoimage
+          - curl
+          - jq
+          - bind-utils
+        state: present
+      when: host_os == 'rhel'
+
+    # ---- Kernel modules ----
+    - name: Ensure KVM kernel modules are loaded
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - kvm
+        - "{{ 'kvm_intel' if 'Intel' in ansible_processor | join(' ') else 'kvm_amd' }}"
+
+    # ---- Services ----
+    - name: Enable and start libvirtd
+      ansible.builtin.systemd:
+        name: libvirtd
+        state: started
+        enabled: true
+
+    # ---- Firewalld ----
+    - name: Ensure firewalld is running
+      ansible.builtin.systemd:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Configure firewalld zone for libvirt
+      ansible.posix.firewalld:
+        zone: libvirt
+        service: "{{ item }}"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop:
+        - dns
+        - dhcp
+
+    # ---- SELinux ----
+    - name: Set SELinux boolean for virt_use_nfs (if NFS storage)
+      ansible.posix.seboolean:
+        name: virt_use_nfs
+        state: true
+        persistent: true
+      when: ansible_selinux.status == "enabled"
+      failed_when: false
+
+    # ---- Validation ----
+    - name: Verify libvirtd is accessible
+      ansible.builtin.command:
+        cmd: virsh version
+      register: virsh_version
+      changed_when: false
+
+    - name: Show libvirt version
+      ansible.builtin.debug:
+        msg: "{{ virsh_version.stdout_lines | first }}"
+
+    - name: Verify KVM acceleration
+      ansible.builtin.command:
+        cmd: virsh capabilities
+      register: virsh_caps
+      changed_when: false
+      failed_when: "'kvm' not in virsh_caps.stdout"

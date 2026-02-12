@@ -1,0 +1,214 @@
+{
+  "project": "ocp4-compact-assisted-installer",
+  "description": "Automated deployment of OpenShift 4.20 Compact cluster (3 control-plane, no workers) via Assisted Installer (console.redhat.com) on KVM/libvirt",
+  "artifacts": [
+    {
+      "index": 1,
+      "path": "deliverables.json",
+      "description": "Master index of all project artifacts with verification checklist",
+      "requires_manual_edit": false,
+      "checklist": ["Valid JSON syntax", "All 28 artifacts listed"]
+    },
+    {
+      "index": 2,
+      "path": "ansible/inventory/hosts.ini",
+      "description": "Ansible inventory with bastion, masters, and ocp groups",
+      "requires_manual_edit": true,
+      "checklist": ["IPs match your environment", "ansible_user is correct", "SSH connectivity verified"]
+    },
+    {
+      "index": 3,
+      "path": "ansible/group_vars/all.yml",
+      "description": "Consolidated variables: cluster config, network, VIPs, masters, secrets paths",
+      "requires_manual_edit": true,
+      "checklist": ["cluster_name set", "base_domain set", "pull_secret_file path valid", "offline_token_file path valid", "ssh_pubkey set", "MAC addresses match hardware", "IPs match planned network"]
+    },
+    {
+      "index": 4,
+      "path": "ansible/site.yml",
+      "description": "Master playbook importing 01..06 in order with tags",
+      "requires_manual_edit": false,
+      "checklist": ["All 6 playbooks imported", "Tags are consistent"]
+    },
+    {
+      "index": 5,
+      "path": "ansible/01_prepare_host.yml",
+      "description": "Prepares Fedora/RHEL hypervisor: KVM packages, libvirtd, firewalld, SELinux",
+      "requires_manual_edit": false,
+      "checklist": ["OS detection works", "libvirtd running", "firewalld configured"]
+    },
+    {
+      "index": 6,
+      "path": "ansible/02_network.yml",
+      "description": "Defines libvirt network (NAT, no built-in DHCP) and storage pool",
+      "requires_manual_edit": false,
+      "checklist": ["virsh net-list shows ocp-net active", "virsh pool-list shows ocp-pool active"]
+    },
+    {
+      "index": 7,
+      "path": "ansible/03_bastion.yml",
+      "description": "Provisions bastion VM and configures DNS (dnsmasq) + DHCP reservations",
+      "requires_manual_edit": false,
+      "checklist": ["Bastion VM running", "dnsmasq active", "DNS resolution works", "DHCP leases served"]
+    },
+    {
+      "index": 8,
+      "path": "ansible/04_services.yml",
+      "description": "Configures HAProxy on bastion: 6443, 22623, 80, 443 with health checks",
+      "requires_manual_edit": false,
+      "checklist": ["HAProxy active", "Ports 6443/22623/80/443 listening", "Stats page at :9000"]
+    },
+    {
+      "index": 9,
+      "path": "ansible/05_assisted.yml",
+      "description": "Assisted Installer workflow: create cluster, download ISO, boot VMs, approve, install",
+      "requires_manual_edit": false,
+      "checklist": ["Cluster created in console.redhat.com", "ISO downloaded", "Hosts discovered", "Installation started", "Installation completed"]
+    },
+    {
+      "index": 10,
+      "path": "ansible/06_post.yml",
+      "description": "Post-install verification: kubeconfig, cluster operators, ingress, DNS",
+      "requires_manual_edit": false,
+      "checklist": ["kubeconfig downloaded", "oc get co all Available", "Ingress reachable", "Apps DNS resolves"]
+    },
+    {
+      "index": 11,
+      "path": "ansible/roles/libvirt/",
+      "description": "Role: install libvirt, create network XML, define/start network and storage pool",
+      "requires_manual_edit": false,
+      "checklist": ["tasks/main.yml exists", "handlers/main.yml exists", "templates/ocp-net.xml.j2 exists"]
+    },
+    {
+      "index": 12,
+      "path": "ansible/roles/kvm_vms/",
+      "description": "Role: create bastion VM via cloud-init and master VMs via virt-install",
+      "requires_manual_edit": false,
+      "checklist": ["tasks/main.yml exists", "defaults/main.yml exists"]
+    },
+    {
+      "index": 13,
+      "path": "ansible/roles/bastion/",
+      "description": "Role: bastion base config (packages, sysctl ip_forward, firewalld)",
+      "requires_manual_edit": false,
+      "checklist": ["tasks/main.yml exists", "handlers/main.yml exists"]
+    },
+    {
+      "index": 14,
+      "path": "ansible/roles/dns/",
+      "description": "Role: deploy dnsmasq with DNS zones (A/PTR records)",
+      "requires_manual_edit": false,
+      "checklist": ["tasks/main.yml exists", "handlers/main.yml exists"]
+    },
+    {
+      "index": 15,
+      "path": "ansible/roles/dhcp/",
+      "description": "Role: deploy dnsmasq DHCP config with MAC reservations and options",
+      "requires_manual_edit": false,
+      "checklist": ["tasks/main.yml exists", "handlers/main.yml exists"]
+    },
+    {
+      "index": 16,
+      "path": "ansible/roles/haproxy/",
+      "description": "Role: install and configure HAProxy with OCP frontends/backends",
+      "requires_manual_edit": false,
+      "checklist": ["tasks/main.yml exists", "handlers/main.yml exists"]
+    },
+    {
+      "index": 17,
+      "path": "ansible/roles/assisted/",
+      "description": "Role: full Assisted Installer API flow (SSO auth, cluster, infra-env, ISO, hosts, install)",
+      "requires_manual_edit": false,
+      "checklist": ["tasks/main.yml exists", "defaults/main.yml exists"]
+    },
+    {
+      "index": 18,
+      "path": "ansible/roles/postinstall/",
+      "description": "Role: post-install checks (kubeconfig, cluster operators, ingress, DNS)",
+      "requires_manual_edit": false,
+      "checklist": ["tasks/main.yml exists"]
+    },
+    {
+      "index": 19,
+      "path": "ansible/templates/dnsmasq.conf.j2",
+      "description": "Jinja2 template: dnsmasq config with DNS zones, DHCP reservations, options 3/6",
+      "requires_manual_edit": false,
+      "checklist": ["Valid dnsmasq syntax", "A records for api/apps", "PTR records", "DHCP reservations by MAC"]
+    },
+    {
+      "index": 20,
+      "path": "ansible/templates/haproxy.cfg.j2",
+      "description": "Jinja2 template: HAProxy frontends/backends for 6443/22623/80/443",
+      "requires_manual_edit": false,
+      "checklist": ["Valid HAProxy syntax", "All 4 ports configured", "Health checks enabled", "Stats page at :9000"]
+    },
+    {
+      "index": 21,
+      "path": "ansible/templates/nmstate.yml.j2",
+      "description": "Jinja2 template: NMState static network config for master NICs",
+      "requires_manual_edit": false,
+      "checklist": ["Valid NMState YAML", "IP/MAC/GW/DNS populated from variables"]
+    },
+    {
+      "index": 22,
+      "path": "ansible/templates/virt-install-master.sh.j2",
+      "description": "Jinja2 template: virt-install command for master VM with CPU/RAM/Disk/MAC/ISO",
+      "requires_manual_edit": false,
+      "checklist": ["Valid shell script", "All placeholders resolved", "boot order hd,cdrom"]
+    },
+    {
+      "index": 23,
+      "path": "scripts/check_env.sh",
+      "description": "Pre-flight checks: libvirt, DNS, DHCP, HAProxy ports, NTP",
+      "requires_manual_edit": true,
+      "checklist": ["Executable permissions", "All checks pass in target environment"]
+    },
+    {
+      "index": 24,
+      "path": "scripts/download_discovery_iso.sh",
+      "description": "Standalone script to download discovery ISO via Assisted Installer API",
+      "requires_manual_edit": true,
+      "checklist": ["offline_token_file path set", "cluster_id set", "ISO downloaded successfully"]
+    },
+    {
+      "index": 25,
+      "path": "scripts/cleanup.sh",
+      "description": "Cleanup script: destroy VMs, remove network, delete ISOs and disks",
+      "requires_manual_edit": false,
+      "checklist": ["All VMs destroyed", "Network removed", "Storage cleaned"]
+    },
+    {
+      "index": 26,
+      "path": "README.md",
+      "description": "Project documentation: prerequisites, usage, variables, troubleshooting",
+      "requires_manual_edit": false,
+      "checklist": ["Prerequisites listed", "Usage examples", "Variable reference"]
+    },
+    {
+      "index": 27,
+      "path": ".github/workflows/ansible-lint.yml",
+      "description": "GitHub Actions workflow for ansible-lint on push/PR",
+      "requires_manual_edit": false,
+      "checklist": ["Valid YAML", "ansible-lint runs on ansible/ directory"]
+    },
+    {
+      "index": 28,
+      "path": ".gitignore",
+      "description": "Git ignore rules for secrets, ISOs, kubeconfig, editor files",
+      "requires_manual_edit": false,
+      "checklist": ["pull-secret excluded", "kubeconfig excluded", "*.iso excluded", "offline-token excluded"]
+    }
+  ],
+  "evals": {
+    "lint": "cd ansible && ansible-lint site.yml",
+    "dry_run": "ansible-playbook ansible/site.yml -i ansible/inventory/hosts.ini --check --diff",
+    "check_env": "bash scripts/check_env.sh",
+    "check_dns_api": "dig @192.168.122.5 api.<CLUSTER>.<DOMAIN> +short",
+    "check_dns_apps": "dig @192.168.122.5 *.apps.<CLUSTER>.<DOMAIN> +short",
+    "check_dns_ptr": "dig @192.168.122.5 -x 192.168.122.101 +short",
+    "check_haproxy_ports": "for p in 6443 22623 80 443; do nc -zv 192.168.122.5 $p; done",
+    "check_dhcp": "nmap --script broadcast-dhcp-discover -e virbr-ocp 2>/dev/null || echo 'nmap not installed'",
+    "post_install_co": "export KUBECONFIG=<kubeconfig_path> && oc get co",
+    "post_install_nodes": "export KUBECONFIG=<kubeconfig_path> && oc get nodes"
+  }
+}

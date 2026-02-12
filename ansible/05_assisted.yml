@@ -1,0 +1,21 @@
+---
+# ===========================================================
+# 05 - Assisted Installer workflow via console.redhat.com
+# ===========================================================
+# Creates cluster, downloads Discovery ISO, boots master VMs,
+# waits for host registration, assigns roles/VIPs, starts
+# installation, and waits for completion.
+#
+# Secrets are read from files and never printed.
+# ===========================================================
+
+- name: Assisted Installer - deploy OCP compact cluster
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  tags: [assisted]
+
+  roles:
+    - role: assisted
+      tags: [assisted]

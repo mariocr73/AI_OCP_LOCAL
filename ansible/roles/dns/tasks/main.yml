@@ -1,0 +1,64 @@
+---
+# ===========================================================
+# Role: dns - Configure dnsmasq DNS service
+# ===========================================================
+# Deploys the dnsmasq configuration with DNS zones (A, PTR,
+# SRV records) and DHCP sections from the shared template.
+# The single dnsmasq.conf.j2 template handles both DNS and
+# DHCP; this role focuses on DNS-related validation.
+# ===========================================================
+
+# ---- Deploy dnsmasq configuration ----
+- name: Deploy dnsmasq configuration
+  ansible.builtin.template:
+    src: dnsmasq.conf.j2
+    dest: /etc/dnsmasq.conf
+    owner: root
+    group: root
+    mode: '0644'
+    backup: true
+    validate: "dnsmasq --test -C %s"
+  notify: Restart dnsmasq
+
+- name: Ensure dnsmasq log file exists
+  ansible.builtin.file:
+    path: /var/log/dnsmasq.log
+    state: touch
+    owner: root
+    group: root
+    mode: '0644'
+    modification_time: preserve
+    access_time: preserve
+
+# ---- Disable systemd-resolved if running (conflicts with dnsmasq) ----
+- name: Check if systemd-resolved is active
+  ansible.builtin.command:
+    cmd: systemctl is-active systemd-resolved
+  register: _resolved_status
+  changed_when: false
+  failed_when: false
+
+- name: Stop and disable systemd-resolved (conflicts with dnsmasq on port 53)
+  ansible.builtin.systemd:
+    name: systemd-resolved
+    state: stopped
+    enabled: false
+  when: _resolved_status.stdout == 'active'
+
+- name: Configure /etc/resolv.conf to use local dnsmasq
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    content: |
+      # Managed by Ansible - points to local dnsmasq
+      nameserver 127.0.0.1
+      search {{ cluster_name }}.{{ base_domain }}
+    owner: root
+    group: root
+    mode: '0644'
+
+# ---- Enable and start dnsmasq ----
+- name: Enable and start dnsmasq
+  ansible.builtin.systemd:
+    name: dnsmasq
+    state: started
+    enabled: true
