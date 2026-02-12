@@ -64,7 +64,8 @@ ssh_pubkey: "<YOUR_SSH_PUBKEY>"                # e.g. "ssh-ed25519 AAAA... user@
 
 # ----- Secrets (file paths - NEVER commit these files) -----
 pull_secret_file: "<PULL_SECRET_PATH>"          # e.g. "/home/user/Downloads/pull-secret.json"
-offline_token_file: "<OFFLINE_TOKEN_PATH>"      # e.g. "/home/user/.ocp-offline-token"
+# offline_token_file is only needed if using the API-based assisted role (05_assisted.yml)
+# offline_token_file: "<OFFLINE_TOKEN_PATH>"    # e.g. "/home/user/.ocp-offline-token"
 
 # ----- Discovery ISO parameters -----
 discovery_iso_params:
