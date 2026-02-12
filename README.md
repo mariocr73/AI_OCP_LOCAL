@@ -1,30 +1,80 @@
 # OCP 4.20 Compact Cluster - Assisted Installer on KVM/libvirt
 
+![OpenShift](https://img.shields.io/badge/OpenShift-4.20-red?logo=redhatopenshift&logoColor=white)
+![Ansible](https://img.shields.io/badge/Ansible-2.15+-black?logo=ansible&logoColor=white)
+![KVM](https://img.shields.io/badge/Platform-KVM%2Flibvirt-blue?logo=linux&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
+
 Deployment of an OpenShift 4.20 **Compact** cluster (3 control-plane nodes, schedulable masters, no dedicated workers) using the **Assisted Installer** service via the `console.redhat.com` UI, running on KVM/libvirt (Fedora or RHEL hypervisor).
+
+---
 
 ## Architecture
 
+```mermaid
+graph TB
+    subgraph HV["<b>Hypervisor Host</b> (Fedora / RHEL)<br/>KVM / libvirt"]
+        direction TB
+        subgraph NET["ocp-net &mdash; 192.168.122.0/24 (NAT)"]
+            direction LR
+            B["<b>bastion</b><br/>.5<br/>DNS + DHCP + HAProxy"]
+            M0["<b>master-0</b><br/>.101<br/>4 vCPU / 16 GB"]
+            M1["<b>master-1</b><br/>.102<br/>4 vCPU / 16 GB"]
+            M2["<b>master-2</b><br/>.103<br/>4 vCPU / 16 GB"]
+        end
+        VIP["API VIP: .10 &nbsp;|&nbsp; Ingress VIP: .11"]
+    end
+
+    CLOUD["console.redhat.com<br/>Assisted Installer UI"]
+
+    B <-->|DNS<br/>DHCP| M0
+    B <-->|DNS<br/>DHCP| M1
+    B <-->|DNS<br/>DHCP| M2
+    B --->|HAProxy<br/>6443 / 443 / 80| VIP
+    CLOUD -.->|Discovery ISO<br/>+ cluster config| NET
+
+    style HV fill:#1a1a2e,stroke:#e94560,stroke-width:2px,color:#fff
+    style NET fill:#16213e,stroke:#0f3460,stroke-width:2px,color:#fff
+    style B fill:#0f3460,stroke:#53d2dc,stroke-width:2px,color:#fff
+    style M0 fill:#533483,stroke:#e94560,stroke-width:2px,color:#fff
+    style M1 fill:#533483,stroke:#e94560,stroke-width:2px,color:#fff
+    style M2 fill:#533483,stroke:#e94560,stroke-width:2px,color:#fff
+    style VIP fill:#e94560,stroke:#fff,stroke-width:1px,color:#fff
+    style CLOUD fill:#2b2d42,stroke:#8d99ae,stroke-width:2px,color:#edf2f4
 ```
-┌─────────────────────────────────────────────────────┐
-│  Hypervisor Host (Fedora / RHEL)                    │
-│  KVM / libvirt                                      │
-│                                                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐          │
-│  │ master-0 │  │ master-1 │  │ master-2 │          │
-│  │ .101     │  │ .102     │  │ .103     │          │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘          │
-│       │              │              │                │
-│  ─────┴──────────────┴──────────────┴────────────── │
-│       ocp-net (192.168.122.0/24, NAT)               │
-│       │                                              │
-│  ┌────┴─────┐                                        │
-│  │ bastion  │  DNS (dnsmasq) + DHCP + HAProxy       │
-│  │ .5       │  api VIP: .10  ingress VIP: .11       │
-│  └──────────┘                                        │
-└─────────────────────────────────────────────────────┘
-          │
-          ▼  console.redhat.com (Assisted Installer UI)
+
+### Bastion Services
+
+```mermaid
+graph LR
+    subgraph BASTION["bastion (192.168.122.5)"]
+        direction TB
+        DNS["<b>dnsmasq</b><br/>DNS + DHCP<br/>port 53"]
+        LB["<b>HAProxy</b><br/>Load Balancer"]
+        STATS["<b>Stats</b><br/>port 9000"]
+    end
+
+    DNS -->|A records| API_DNS["api.ocp.local.lab &rarr; .10"]
+    DNS -->|Wildcard| APPS_DNS["*.apps.ocp.local.lab &rarr; .11"]
+    DNS -->|DHCP reservations| NODES["master-0/1/2"]
+
+    LB -->|":6443"| API_BE["API backends<br/>masters:6443"]
+    LB -->|":22623"| MCS_BE["MCS backends<br/>masters:22623"]
+    LB -->|":80 / :443"| ING_BE["Ingress backends<br/>masters:80/443"]
+
+    style BASTION fill:#16213e,stroke:#53d2dc,stroke-width:2px,color:#fff
+    style DNS fill:#0f3460,stroke:#53d2dc,stroke-width:1px,color:#fff
+    style LB fill:#0f3460,stroke:#53d2dc,stroke-width:1px,color:#fff
+    style STATS fill:#0f3460,stroke:#53d2dc,stroke-width:1px,color:#fff
+    style API_DNS fill:#1a1a2e,stroke:#8d99ae,stroke-width:1px,color:#edf2f4
+    style APPS_DNS fill:#1a1a2e,stroke:#8d99ae,stroke-width:1px,color:#edf2f4
+    style NODES fill:#1a1a2e,stroke:#8d99ae,stroke-width:1px,color:#edf2f4
+    style API_BE fill:#533483,stroke:#e94560,stroke-width:1px,color:#fff
+    style MCS_BE fill:#533483,stroke:#e94560,stroke-width:1px,color:#fff
+    style ING_BE fill:#533483,stroke:#e94560,stroke-width:1px,color:#fff
 ```
+
+---
 
 ## Prerequisites
 
@@ -38,9 +88,31 @@ Deployment of an OpenShift 4.20 **Compact** cluster (3 control-plane nodes, sche
 | Ansible | `ansible-core >= 2.15` |
 | Internet | Hypervisor must reach `console.redhat.com` and Red Hat CDN |
 
+---
+
 ## Deployment Workflow
 
 This project uses a **hybrid approach**: Ansible automates infrastructure and bastion services, while cluster creation and installation are done through the console.redhat.com UI.
+
+```mermaid
+flowchart LR
+    P1["<b>Phase 1</b><br/>Infrastructure<br/>Setup"]
+    P2["<b>Phase 2</b><br/>Cluster<br/>Creation"]
+    P3["<b>Phase 3</b><br/>Master<br/>VMs"]
+    P4["<b>Phase 4</b><br/>Installation"]
+    P5["<b>Phase 5</b><br/>Access"]
+
+    P1 -->|Ansible +<br/>Script| P2
+    P2 -->|console.redhat.com<br/>UI| P3
+    P3 -->|virt-install| P4
+    P4 -->|console.redhat.com<br/>UI| P5
+
+    style P1 fill:#0f3460,stroke:#53d2dc,stroke-width:2px,color:#fff
+    style P2 fill:#533483,stroke:#e94560,stroke-width:2px,color:#fff
+    style P3 fill:#0f3460,stroke:#53d2dc,stroke-width:2px,color:#fff
+    style P4 fill:#533483,stroke:#e94560,stroke-width:2px,color:#fff
+    style P5 fill:#e94560,stroke:#fff,stroke-width:2px,color:#fff
+```
 
 ### Phase 1: Infrastructure Setup (Ansible + Script)
 
@@ -115,6 +187,8 @@ oc get clusteroperators
 # Then open: https://console-openshift-console.apps.ocp.local.lab
 ```
 
+---
+
 ## Variables Reference
 
 All variables are defined in `ansible/group_vars/all.yml`. Key variables requiring manual edit:
@@ -127,6 +201,8 @@ All variables are defined in `ansible/group_vars/all.yml`. Key variables requiri
 | `pull_secret_file` | Path to pull-secret.json | `/home/user/Downloads/pull-secret.json` |
 | `bastion_vm.base_image` | Path to RHEL/Fedora qcow2 | `/home/user/VirtualMachines/rhel9.7.qcow2` |
 | `masters[].mac` | MAC addresses for master VMs | `52:54:00:aa:bb:01` |
+
+---
 
 ## Project Structure
 
@@ -158,6 +234,8 @@ All variables are defined in `ansible/group_vars/all.yml`. Key variables requiri
 | `scripts/check_env.sh` | Pre-flight environment validation |
 | `scripts/cleanup.sh` | Destroy all VMs, network, and storage |
 
+---
+
 ## DNS Setup on Hypervisor
 
 To access the OCP web console from your hypervisor, you need DNS resolution for `*.apps.ocp.local.lab`:
@@ -180,6 +258,8 @@ EOF
 sudo systemctl restart NetworkManager
 ```
 
+---
+
 ## Cleanup
 
 ```bash
@@ -187,10 +267,17 @@ sudo systemctl restart NetworkManager
 bash scripts/cleanup.sh
 ```
 
+---
+
 ## Troubleshooting
 
-- **Hosts not registering**: Check bastion DNS resolution (`dig @192.168.122.5 api.ocp.local.lab`) and that the discovery ISO booted correctly (`virsh console master-0`).
-- **HAProxy errors**: Verify ports with `ss -tlnp | grep -E '6443|22623|80|443'` on the bastion.
-- **VMs not rebooting after install**: Ensure `--events on_reboot=restart` was used in `virt-install`. Fix with: `sudo virt-xml master-0 --edit --events on_reboot=restart`.
-- **Installation stuck**: Check progress in the console.redhat.com UI cluster details page.
-- **SELinux dnsmasq issues**: Use `log-queries` and `log-dhcp` directives (logs to journald). Avoid `log-facility` with custom paths.
+| Symptom | Cause | Fix |
+|---|---|---|
+| Hosts not registering in UI | DNS or ISO boot issue | `dig @192.168.122.5 api.ocp.local.lab` / `virsh console master-0` |
+| HAProxy errors | Ports not listening | `ss -tlnp \| grep -E '6443\|22623\|80\|443'` on bastion |
+| VMs don't reboot after install | Missing virt-install flag | `sudo virt-xml master-0 --edit --events on_reboot=restart` |
+| Operators degraded post-reboot | dnsmasq boot race (DNS timeout) | `systemctl restart dnsmasq` on bastion, then restart CoreDNS pods |
+| Installation stuck | Various | Check console.redhat.com UI cluster details page |
+| SELinux dnsmasq issues | Custom log paths blocked | Use `log-queries` / `log-dhcp` (journald). Avoid `log-facility` |
+
+> **Note**: The dnsmasq boot race condition is mitigated by the systemd override in the `dns` Ansible role (`After=network-online.target`).
