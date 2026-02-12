@@ -56,6 +56,32 @@
     group: root
     mode: '0644'
 
+# ---- Ensure dnsmasq waits for network on boot ----
+# dnsmasq can start before the NIC has its IP assigned, causing it
+# to fail binding to listen-address (e.g. 192.168.122.5). This
+# systemd override ensures it waits for network-online.target.
+- name: Create dnsmasq systemd override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/dnsmasq.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy dnsmasq systemd override (wait for network)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/dnsmasq.service.d/wait-for-network.conf
+    content: |
+      [Unit]
+      After=network-online.target
+      Wants=network-online.target
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart dnsmasq
+
 # ---- Enable and start dnsmasq ----
 - name: Enable and start dnsmasq
   ansible.builtin.systemd:
