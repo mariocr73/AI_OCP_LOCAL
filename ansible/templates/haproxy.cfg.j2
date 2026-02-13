@@ -88,7 +88,7 @@ backend ingress_http_backend
     default-server inter 10s fall 2 rise 3
     balance roundrobin
 {% for master in masters %}
-    server {{ master.name }} {{ master.ip }}:{{ haproxy_backend_port.ingress_http }} check
+    server {{ master.name }} {{ master.ip }}:{{ haproxy_backend_port.ingress_http }} check port 1936
 {% endfor %}
 
 # ===========================================================
@@ -105,5 +105,5 @@ backend ingress_https_backend
     default-server inter 10s fall 2 rise 3
     balance roundrobin
 {% for master in masters %}
-    server {{ master.name }} {{ master.ip }}:{{ haproxy_backend_port.ingress_https }} check check-ssl verify none
+    server {{ master.name }} {{ master.ip }}:{{ haproxy_backend_port.ingress_https }} check port 1936
 {% endfor %}
